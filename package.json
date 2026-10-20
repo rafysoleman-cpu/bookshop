@@ -1,0 +1,28 @@
+{
+  "name": "bookshop",
+  "version": "1.0.0",
+  "description": "BookShop online bookstore monorepo",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "npm run dev --workspace=apps/backend",
+    "dev:frontend": "npm run dev --workspace=apps/frontend",
+    "devall": "concurrently \"wsl sudo service redis-server start\" \"npm run dev:backend\" \"npm run dev:frontend\" --names \"REDIS,BACKEND,FRONTEND\" --prefix-colors \"red,green,blue\"",
+    "build": "npm run build --workspaces",
+    "lint": "eslint . --ext .js,.jsx",
+    "format": "prettier --write ."
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "prettier": "^3.2.5",
+    "eslint": "^8.57.0"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  }
+}

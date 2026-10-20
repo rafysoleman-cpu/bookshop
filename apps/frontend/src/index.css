@@ -1,0 +1,376 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply font-sans antialiased bg-gray-50 text-gray-900 dark:bg-slate-900 dark:text-slate-100;
+  }
+
+  * {
+    @apply border-gray-200;
+  }
+
+  /*
+    Global border colour for dark mode.
+
+    Written as a separate `.dark *` rule rather than a `dark:` variant on the
+    base declaration above because @apply cannot take variants. Specificity
+    (0,1,0) beats the bare `*` selector (0,0,0), so this wins in dark mode
+    without needing !important.
+  */
+  .dark * {
+    @apply border-slate-700;
+  }
+
+  /*
+    Smooth light <-> dark switching.
+
+    Every element animates its colour properties so a theme change eases in
+    over 200ms instead of snapping. Deliberately scoped to colour properties
+    only — transitioning transform/opacity globally would fight the existing
+    slide/fade animations and cost main-thread work on every scroll frame.
+
+    Lives in @layer base so component and utility transitions
+    (.card-hover, transition-transform, ...) still override it, and is gated
+    on prefers-reduced-motion so users who ask for less motion get none.
+  */
+  @media (prefers-reduced-motion: no-preference) {
+    *,
+    *::before,
+    *::after {
+      transition-property: color, background-color, border-color, fill, stroke,
+        text-decoration-color;
+      transition-duration: 200ms;
+      transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+    }
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    @apply w-2;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-gray-100 dark:bg-slate-800;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-gray-300 rounded-full dark:bg-slate-600;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-gray-400 dark:bg-slate-500;
+  }
+
+  /* Hide scrollbar on mobile for horizontal scrolling */
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Selection color */
+  ::selection {
+    @apply bg-primary-100 text-primary-900 dark:bg-primary-800 dark:text-primary-50;
+  }
+
+  /* Focus styles */
+  :focus-visible {
+    @apply outline-none ring-2 ring-primary-500 ring-offset-2 dark:ring-offset-slate-900;
+  }
+}
+
+@layer components {
+  /* Glass morphism components */
+  .glass {
+    @apply bg-white/80 backdrop-blur-md border border-white/20 shadow-glass dark:bg-slate-800/70 dark:border-slate-600/40;
+  }
+
+  .glass-sm {
+    @apply bg-white/70 backdrop-blur-sm border border-white/10 shadow-glass-sm dark:bg-slate-800/60 dark:border-slate-600/30;
+  }
+
+  .glass-lg {
+    @apply bg-white/90 backdrop-blur-lg border border-white/30 shadow-glass-lg dark:bg-slate-800/85 dark:border-slate-600/50;
+  }
+
+  /* Button variants */
+  .btn {
+    @apply inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed dark:focus:ring-offset-slate-900;
+  }
+
+  .btn-primary {
+    @apply btn bg-primary-600 text-white hover:bg-primary-700 focus:ring-primary-500 shadow-sm;
+  }
+
+  .btn-secondary {
+    @apply btn bg-gray-100 text-gray-900 hover:bg-gray-200 focus:ring-gray-500 dark:bg-slate-700 dark:text-slate-100 dark:hover:bg-slate-600;
+  }
+
+  .btn-outline {
+    @apply btn border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 focus:ring-gray-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700;
+  }
+
+  .btn-ghost {
+    @apply btn text-gray-700 hover:bg-gray-100 focus:ring-gray-500 dark:text-slate-300 dark:hover:bg-slate-800;
+  }
+
+  .btn-danger {
+    @apply btn bg-error-600 text-white hover:bg-error-700 focus:ring-error-500 shadow-sm;
+  }
+
+  .btn-success {
+    @apply btn bg-success-600 text-white hover:bg-success-700 focus:ring-success-500 shadow-sm;
+  }
+
+  .btn-sm {
+    @apply px-3 py-1.5 text-xs;
+  }
+
+  .btn-lg {
+    @apply px-6 py-3 text-base;
+  }
+
+  /* Card components */
+  .card {
+    @apply bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden dark:bg-slate-800 dark:border-slate-700;
+  }
+
+  .card-hover {
+    @apply card transition-all duration-200 hover:shadow-lg hover:-translate-y-1;
+  }
+
+  .card-glass {
+    @apply glass rounded-xl overflow-hidden transition-all duration-200 hover:shadow-glass-lg hover:-translate-y-1;
+  }
+
+  /* Input components */
+  .input {
+    @apply block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 sm:text-sm transition-colors duration-200 dark:bg-slate-900 dark:border-slate-600 dark:text-slate-100 dark:placeholder-slate-500;
+  }
+
+  .input-error {
+    @apply border-error-300 text-error-900 placeholder-error-300 focus:ring-error-500 focus:border-error-500 dark:border-error-700 dark:text-error-200 dark:placeholder-error-600;
+  }
+
+  /* Badge components */
+  .badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+
+  .badge-primary {
+    @apply badge bg-primary-100 text-primary-800 dark:bg-primary-900 dark:text-primary-200;
+  }
+
+  .badge-success {
+    @apply badge bg-success-100 text-success-800 dark:bg-success-900 dark:text-success-200;
+  }
+
+  .badge-warning {
+    @apply badge bg-warning-100 text-warning-800 dark:bg-warning-900 dark:text-warning-200;
+  }
+
+  .badge-error {
+    @apply badge bg-error-100 text-error-800 dark:bg-error-900 dark:text-error-200;
+  }
+
+  .badge-gray {
+    @apply badge bg-gray-100 text-gray-800 dark:bg-slate-700 dark:text-slate-200;
+  }
+
+  /* Loading spinner */
+  .spinner {
+    @apply animate-spin rounded-full border-2 border-gray-300 border-t-primary-600 dark:border-slate-600;
+  }
+
+  .spinner-sm {
+    @apply spinner h-4 w-4;
+  }
+
+  .spinner-md {
+    @apply spinner h-6 w-6;
+  }
+
+  .spinner-lg {
+    @apply spinner h-8 w-8;
+  }
+
+  /* Skeleton loading */
+  .skeleton {
+    @apply animate-pulse bg-gray-200 rounded dark:bg-slate-700;
+  }
+
+  /* Product card */
+  .product-card {
+    @apply card-glass group cursor-pointer;
+  }
+
+  .product-card-image {
+    @apply relative aspect-square overflow-hidden bg-gray-100 dark:bg-slate-700/50;
+  }
+
+  .product-card-content {
+    @apply p-4 space-y-2;
+  }
+
+  .product-card-title {
+    @apply font-medium text-gray-900 line-clamp-2 group-hover:text-primary-600 transition-colors dark:text-slate-100 dark:group-hover:text-primary-400;
+  }
+
+  .product-card-price {
+    @apply text-lg font-bold text-gray-900 dark:text-slate-100;
+  }
+
+  /* Flash sale timer */
+  .flash-timer {
+    @apply flex items-center space-x-2 text-sm font-medium;
+  }
+
+  /* Stays dark in both themes: the digits are a "live" badge, not a surface. */
+  .flash-timer-digit {
+    @apply bg-gray-900 text-white px-2 py-1 rounded dark:bg-slate-950 dark:text-slate-100;
+  }
+
+  /* Navigation */
+  .nav-link {
+    @apply text-gray-600 hover:text-primary-600 px-3 py-2 text-sm font-medium transition-colors duration-200 dark:text-slate-300 dark:hover:text-primary-400;
+  }
+
+  .nav-link-active {
+    @apply nav-link text-primary-600 bg-primary-50 rounded-lg dark:bg-primary-950/50 dark:text-primary-300;
+  }
+
+  /* Breadcrumb */
+  .breadcrumb {
+    @apply flex items-center space-x-2 text-sm text-gray-500 dark:text-slate-400;
+  }
+
+  .breadcrumb-item {
+    @apply hover:text-gray-700 transition-colors dark:hover:text-slate-200;
+  }
+
+  .breadcrumb-separator {
+    @apply text-gray-400 dark:text-slate-500;
+  }
+
+  /* Rating stars */
+  .rating-stars {
+    @apply flex items-center space-x-1;
+  }
+
+  .rating-star {
+    @apply w-4 h-4;
+  }
+
+  .rating-star-filled {
+    @apply rating-star text-yellow-400 fill-current;
+  }
+
+  .rating-star-empty {
+    @apply rating-star text-gray-300 fill-current dark:text-slate-600;
+  }
+
+  /* Search input */
+  .search-input {
+    @apply input pl-10 pr-4 py-2.5;
+  }
+
+  .search-icon {
+    @apply absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5 dark:text-slate-500;
+  }
+
+  /* Cart dropdown */
+  .cart-dropdown {
+    @apply absolute right-0 mt-2 w-80 bg-white rounded-lg shadow-lg border border-gray-200 z-50 max-h-96 overflow-y-auto dark:bg-slate-800 dark:border-slate-700;
+  }
+
+  /* Mobile menu */
+  .mobile-menu {
+    @apply fixed inset-0 bg-white z-50 transform transition-transform duration-300 ease-in-out dark:bg-slate-800;
+  }
+
+  .mobile-menu-open {
+    @apply translate-x-0;
+  }
+
+  .mobile-menu-closed {
+    @apply translate-x-full;
+  }
+
+  /* Hero section */
+  .hero-gradient {
+    @apply bg-gradient-to-br from-primary-50 via-white to-secondary-50 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900;
+  }
+
+  /* Category pill */
+  .category-pill {
+    @apply inline-flex items-center px-4 py-2 rounded-full bg-white border border-gray-200 hover:border-primary-300 hover:bg-primary-50 transition-all duration-200 cursor-pointer dark:bg-slate-800 dark:border-slate-700 dark:hover:border-primary-700 dark:hover:bg-primary-950/40;
+  }
+
+  /* Global shimmer animation for progress bars - used by EnterpriseUploadProgressBar */
+  @keyframes shimmer {
+    0% {
+      transform: translateX(-100%);
+    }
+    100% {
+      transform: translateX(100%);
+    }
+  }
+
+  .animate-shimmer {
+    animation: shimmer 2s infinite;
+  }
+
+  /* Shimmer effect - reuses the global shimmer animation */
+  .shimmer {
+    @apply relative overflow-hidden;
+  }
+
+  .shimmer::before {
+    @apply absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white to-transparent opacity-50;
+    animation: shimmer 2s infinite;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .line-clamp-1 {
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 1;
+  }
+
+  .line-clamp-2 {
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .line-clamp-3 {
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+  }
+
+  .safe-top {
+    padding-top: env(safe-area-inset-top);
+  }
+
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}

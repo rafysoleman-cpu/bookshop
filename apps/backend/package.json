@@ -1,0 +1,53 @@
+{
+  "name": "@bookshop/backend",
+  "version": "1.0.0",
+  "description": "BookShop backend API",
+  "main": "src/app.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/app.js",
+    "build": "echo 'No build needed for backend'",
+    "dev": "nodemon src/app.js",
+    "test": "jest",
+    "lint": "eslint src/ --ext .js",
+    "format": "prettier --write src/",
+    "backfill:wishlist-counts": "node src/scripts/backfillWishlistCounts.js"
+  },
+  "dependencies": {
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "@imagekit/nodejs": "^7.3.0",
+    "aws-sdk": "^2.1550.0",
+    "axios": "^1.6.7",
+    "bcryptjs": "^2.4.3",
+    "bullmq": "^5.1.9",
+    "cors": "^2.8.5",
+    "crypto": "^1.0.1",
+    "dotenv": "^16.4.5",
+    "express": "^4.18.2",
+    "express-mongo-sanitize": "^2.2.0",
+    "express-rate-limit": "^7.2.0",
+    "ffmpeg-static": "^5.3.0",
+    "helmet": "^7.1.0",
+    "joi": "^17.12.1",
+    "jsonwebtoken": "^9.0.3",
+    "moment": "^2.30.1",
+    "mongoose": "^8.2.1",
+    "multer": "^1.4.5-lts.1",
+    "nodemailer": "^6.10.1",
+    "passport": "^0.7.0",
+    "passport-google-oauth20": "^2.0.0",
+    "passport-jwt": "^4.0.1",
+    "redis": "^4.6.13",
+    "sharp": "^0.33.2",
+    "socket.io": "^4.7.4",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "@express-rate-limit/tsconfig": "^1.0.2",
+    "eslint": "^8.57.0",
+    "jest": "^29.7.0",
+    "nodemon": "^3.1.0",
+    "prettier": "^3.2.5",
+    "supertest": "^6.3.4"
+  }
+}

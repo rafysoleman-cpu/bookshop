@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+
+    <!--
+      Theme hydration — must stay the first script in <head>.
+
+      Runs before the stylesheet is applied and before React boots, so a user
+      who chose the dark / eye-protection palette never sees a white flash on
+      load. It resolves the stored preference against prefers-color-scheme and
+      sets the same three things store/themeStore.js sets (class, data-theme,
+      colorScheme), keeping the two in agreement by construction.
+
+      Kept dependency-free and inline on purpose: an external file would be a
+      second round trip and would arrive too late to prevent the flash.
+    -->
+    <script>
+      (function () {
+        try {
+          var stored = window.localStorage.getItem('theme')
+          var theme = stored === 'light' || stored === 'dark' || stored === 'system' ? stored : 'system'
+          var isDark =
+            theme === 'dark' ||
+            (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+          var root = document.documentElement
+
+          root.classList.toggle('dark', isDark)
+          root.setAttribute('data-theme', isDark ? 'dark' : 'light')
+          root.style.colorScheme = isDark ? 'dark' : 'light'
+        } catch (error) {
+          /* localStorage blocked (private mode): fall through to light. */
+        }
+      })()
+    </script>
+
+    <!-- Keeps native UI (scrollbars, form controls, canvas) in step with the theme. -->
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f9fafb" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0f172a" />
+
+    <link rel="icon" type="image/svg+xml" href="/bookshop.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BookShop</title>
+    <meta name="description" content="Discover books across every genre at BookShop." />
+    
+    <!-- Preconnect to external domains -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+    
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="BookShop" />
+    <meta property="og:description" content="Discover books across every genre at BookShop." />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="BookShop" />
+    <meta name="twitter:description" content="Discover books across every genre at BookShop." />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
