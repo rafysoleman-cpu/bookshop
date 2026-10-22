@@ -5,9 +5,10 @@ import { protect, authorize, optionalAuth } from '../middlewares/auth.js';
 import { validate, createProductSchema, updateProductSchema } from '../utils/validation.js';
 import { getCache, setCache } from '../config/redis.js';
 import { invalidateProductCaches } from '../utils/cacheInvalidation.js';
-import { handleImageUpload, handleMultipleImageUpload } from '../middlewares/uploadMiddleware.js';
+import { handleMultipleImageUpload } from '../middlewares/uploadMiddleware.js';
 import { getDefaultUploadService } from '../services/uploadService.js';
 import { emitUploadProgress, emitCatalogUpdate } from '../sockets/socketHandler.js';
+import { buildProductCreate, buildProductUpdate, splitClearedPaths, applyMainImage } from '../utils/productPayload.js';
 
 const router = express.Router();
 
@@ -172,9 +173,10 @@ router.get('/:idOrSlug', optionalAuth, async (req, res, next) => {
       });
     }
 
-    // Increment view count
+    // Increment view count. Skip full document validation: the view counter
+    // must never fail because a legacy document is missing a newer field.
     product.viewCount += 1;
-    await product.save();
+    await product.save({ validateBeforeSave: false });
 
     // Cache result
     await setCache(cacheKey, product, 300); // 5 minutes
@@ -220,6 +222,7 @@ router.post('/', protect, authorize('admin'), handleMultipleImageUpload, validat
 
     const productData = { ...req.body }
     delete productData.uploadId
+    const imageAlts = Array.isArray(req.body.imageAlts) ? req.body.imageAlts : []
 
     if (totalImages > 0) {
       const uploadService = await getDefaultUploadService()
@@ -238,7 +241,7 @@ router.post('/', protect, authorize('admin'), handleMultipleImageUpload, validat
           uploadedImages.push({
             url: uploadResult.url,
             ...(uploadResult.fileId ? { fileId: uploadResult.fileId } : {}),
-            alt: productName
+            alt: imageAlts[i] || productName
           })
         } catch (uploadError) {
           console.error(`Error uploading image ${file.originalname}:`, uploadError)
@@ -253,7 +256,7 @@ router.post('/', protect, authorize('admin'), handleMultipleImageUpload, validat
         })
       }
 
-      productData.images = uploadedImages
+      productData.uploadedImages = uploadedImages
     }
 
     emitProgress({
@@ -263,7 +266,15 @@ router.post('/', protect, authorize('admin'), handleMultipleImageUpload, validat
       message: 'Finalizing product creation...'
     })
 
-    const product = await Product.create(productData)
+    const requestedMainImage = Number.parseInt(productData.mainImageIndex, 10)
+    delete productData.mainImageIndex
+    const createPayload = buildProductCreate(
+      productData,
+      productData.uploadedImages ?? [],
+      Number.isNaN(requestedMainImage) ? 0 : requestedMainImage
+    )
+
+    const product = await Product.create(createPayload)
 
     // Clear every cache that can hold a copy of this product
     await invalidateProductCaches(product._id, product.slug);
@@ -321,37 +332,46 @@ router.put('/:id', protect, authorize('admin'), handleMultipleImageUpload, valid
     const updateData = { ...req.body };
 
     // Handle new image uploads
+    let uploadedImages = []
     if (req.files && req.files.length > 0) {
       const uploadService = await getDefaultUploadService();
-      const uploadedImages = [];
+      const imageAlts = Array.isArray(req.body.imageAlts) ? req.body.imageAlts : [];
 
       // Upload each new image
-      for (const file of req.files) {
+      for (const [index, file] of req.files.entries()) {
         const uploadResult = await uploadService.uploadFile(
           file.buffer,
           file.originalname,
           'products'
         );
-        
+
         uploadedImages.push({
           url: uploadResult.url,
-          alt: req.body.imageAlt || product.name,
-          isMain: uploadedImages.length === 0 && (!product.images || product.images.length === 0)
+          alt: imageAlts[index] || req.body.name || product.name
         });
-      }
-
-      // Combine with existing images if any
-      if (product.images && product.images.length > 0) {
-        updateData.images = [...product.images, ...uploadedImages];
-      } else {
-        updateData.images = uploadedImages;
       }
     }
 
-    product = await Product.findByIdAndUpdate(id, updateData, {
-      new: true,
-      runValidators: true
-    });
+    const update = buildProductUpdate({ ...updateData, uploadedImages }, product);
+
+    if (!Object.keys(update).length) {
+      return res.status(400).json({ success: false, error: 'No valid fields provided to update' });
+    }
+
+    if (!update.images && uploadedImages.length > 0) {
+      update.images = [...(product.images ?? []), ...uploadedImages];
+    }
+
+    if (update.images && updateData.mainImageIndex !== undefined) {
+      const index = Number.parseInt(updateData.mainImageIndex, 10);
+      update.images = applyMainImage(update.images, Number.isNaN(index) ? 0 : index);
+    }
+
+    const { assignable, cleared } = splitClearedPaths(update);
+    cleared.forEach((path) => product.set(path, undefined));
+    product.set(assignable);
+
+    product = await product.save();
 
 // Clear cache. This used to call deleteCachePattern(`product:${id}`), which
 // never matched the `product:<slug>` key the storefront actually reads.

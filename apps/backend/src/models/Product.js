@@ -11,19 +11,25 @@ const productSchema = new mongoose.Schema({
     type: String,
     required: false,
     unique: true,
-    lowercase: true
+    sparse: true,
+    lowercase: true,
+    trim: true,
+    maxlength: [120, 'Slug cannot be more than 120 characters']
   },
   description: {
     type: String,
     required: false,
+    trim: true,
     maxlength: [2000, 'Description cannot be more than 2000 characters']
   },
   shortDescription: {
     type: String,
+    trim: true,
     maxlength: [200, 'Short description cannot be more than 200 characters']
   },
   author: {
     type: String,
+    required: [true, 'Author is required'],
     trim: true,
     maxlength: [150, 'Author name cannot be more than 150 characters']
   },
@@ -73,14 +79,17 @@ const productSchema = new mongoose.Schema({
     type: String,
     required: false,
     unique: true,
-    sparse: true
+    sparse: true,
+    trim: true,
+    maxlength: [64, 'SKU cannot be more than 64 characters']
   },
   barcode: {
     type: String,
     required: false,
     unique: true,
     sparse: true,
-    trim: true
+    trim: true,
+    maxlength: [64, 'Barcode cannot be more than 64 characters']
   },
   price: {
     type: Number,
@@ -95,15 +104,25 @@ const productSchema = new mongoose.Schema({
     type: Number,
     min: [0, 'Cost price cannot be negative']
   },
-  images: [{
-    url: String,
-    alt: String,
-    fileId: String,
-    isMain: {
-      type: Boolean,
-      default: false
+  images: {
+    type: [{
+      url: { type: String, required: true },
+      alt: {
+        type: String,
+        trim: true,
+        maxlength: [200, 'Image alt text cannot be more than 200 characters']
+      },
+      fileId: String,
+      isMain: {
+        type: Boolean,
+        default: false
+      }
+    }],
+    validate: {
+      validator: (images) => !Array.isArray(images) || images.length <= 10,
+      message: 'A product can have at most 10 images'
     }
-  }],
+  },
   video: {
     url: String,
     thumbnail: String
@@ -132,7 +151,8 @@ const productSchema = new mongoose.Schema({
     },
     lowStockThreshold: {
       type: Number,
-      default: 10
+      default: 10,
+      min: [0, 'Low stock threshold cannot be negative']
     }
   },
   weight: {
@@ -178,7 +198,11 @@ const productSchema = new mongoose.Schema({
       type: Boolean,
       default: false
     },
-    discountPercentage: Number,
+    discountPercentage: {
+      type: Number,
+      min: [0, 'Discount cannot be negative'],
+      max: [100, 'Discount cannot exceed 100%']
+    },
     startDate: Date,
     endDate: Date,
     maxQuantity: Number,
@@ -222,9 +246,13 @@ const productSchema = new mongoose.Schema({
     },
     shippingCost: {
       type: Number,
-      default: 0
+      default: 0,
+      min: [0, 'Shipping cost cannot be negative']
     },
-    shippingWeight: Number,
+    shippingWeight: {
+      type: Number,
+      min: [0, 'Shipping weight cannot be negative']
+    },
     shippingDimensions: {
       length: Number,
       width: Number,
@@ -238,7 +266,8 @@ const productSchema = new mongoose.Schema({
     },
     taxRate: {
       type: Number,
-      default: 0
+      default: 0,
+      min: [0, 'Tax rate cannot be negative']
     }
   },
   metadata: {
@@ -269,11 +298,14 @@ productSchema.index({ createdAt: -1 });
 productSchema.index({ featured: 1, status: 1 });
 productSchema.index({ 'flashSale.enabled': 1, 'flashSale.endDate': 1 });
 
-// Keep blank ISBN values out of the unique sparse index
+// Keep blank unique identifiers out of the unique sparse indexes. A stored
+// `null` still counts as an index entry, so these must be removed entirely.
 productSchema.pre('validate', function(next) {
-  if (this.isbn === '' || this.isbn === null) {
-    this.isbn = undefined;
-  }
+  ['isbn', 'sku', 'barcode'].forEach((field) => {
+    if (this[field] === '' || this[field] === null) {
+      this[field] = undefined;
+    }
+  });
   next();
 });
 

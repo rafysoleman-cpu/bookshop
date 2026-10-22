@@ -19,7 +19,7 @@ import { getDefaultUploadService } from '../services/uploadService.js';
 
 import { destroyProductImages, uploadProductImages } from '../services/productImageService.js';
 
-import { buildProductUpdate } from '../utils/productPayload.js';
+import { buildProductUpdate, buildProductCreate, splitClearedPaths, applyMainImage } from '../utils/productPayload.js';
 
 
 import { ImageKitService } from '../services/imagekitService.js';
@@ -797,6 +797,12 @@ router.put('/products/:id', handleMultipleImageUpload, validate(updateProductSch
         folder: 'products',
         altText: req.body.name
       });
+
+      const imageAlts = Array.isArray(req.body.imageAlts) ? req.body.imageAlts : [];
+      newImages = newImages.map((image, index) => ({
+        ...image,
+        alt: imageAlts[index] ?? image.alt
+      }));
     }
 
     const update = buildProductUpdate({ ...req.body, uploadedImages: newImages }, product);
@@ -808,7 +814,18 @@ router.put('/products/:id', handleMultipleImageUpload, validate(updateProductSch
       });
     }
 
-    product.set(update);
+    const { assignable, cleared } = splitClearedPaths(update);
+
+    // Explicitly cleared values must be unset, not stored as null.
+    cleared.forEach((path) => product.set(path, undefined));
+
+    // The admin can pick any image (existing or freshly uploaded) as main.
+    if (assignable.images && req.body.mainImageIndex !== undefined) {
+      const index = Number.parseInt(req.body.mainImageIndex, 10);
+      assignable.images = applyMainImage(assignable.images, Number.isNaN(index) ? 0 : index);
+    }
+
+    product.set(assignable);
 
     await product.save({ validateBeforeSave: true });
 
@@ -888,9 +905,11 @@ router.delete('/products/:id', async (req, res, next) => {
       });
     }
 
-    // Soft delete keeps the stored images so the product can be restored
+    // Soft delete keeps the stored images so the product can be restored.
+    // Skip full document validation: only the status changes here, and a legacy
+    // document missing a newer required field must still be deletable.
     product.status = 'deleted';
-    await product.save();
+    await product.save({ validateBeforeSave: false });
 
     // Clear every cache that can hold a copy of this product
     await invalidateProductCaches(id, product.slug);
@@ -1612,6 +1631,7 @@ router.post('/products', protect, authorize('admin'), handleMultipleImageUpload,
     // Never persist the transport-only upload id on the product document.
     const productData = { ...req.body }
     delete productData.uploadId
+    const imageAlts = Array.isArray(req.body.imageAlts) ? req.body.imageAlts : []
 
     // Process images with progress updates
     if (totalImages > 0) {
@@ -1631,7 +1651,7 @@ router.post('/products', protect, authorize('admin'), handleMultipleImageUpload,
           uploadedImages.push({
             url: uploadResult.url,
             ...(uploadResult.fileId ? { fileId: uploadResult.fileId } : {}),
-            alt: productName
+            alt: imageAlts[i] || productName
           })
         } catch (uploadError) {
           console.error(`Error uploading image ${file.originalname}:`, uploadError)
@@ -1647,7 +1667,7 @@ router.post('/products', protect, authorize('admin'), handleMultipleImageUpload,
         })
       }
 
-      productData.images = uploadedImages
+      productData.uploadedImages = uploadedImages
     }
 
     // Final processing
@@ -1658,7 +1678,18 @@ router.post('/products', protect, authorize('admin'), handleMultipleImageUpload,
       message: 'Finalizing product creation...'
     })
 
-    const product = await Product.create(productData)
+    // Same normalisation as the update route: the create and edit forms write
+    // identical shapes to the database.
+    const requestedMainImage = Number.parseInt(productData.mainImageIndex, 10)
+    delete productData.mainImageIndex
+    const createPayload = buildProductCreate(
+      productData,
+      productData.uploadedImages ?? [],
+      Number.isNaN(requestedMainImage) ? 0 : requestedMainImage
+    )
+    delete createPayload.uploadedImages
+
+    const product = await Product.create(createPayload)
 
     // Clear every cache that can hold a copy of this product
     await invalidateProductCaches(product._id, product.slug);

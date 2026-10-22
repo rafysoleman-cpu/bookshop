@@ -16,7 +16,8 @@ export default defineConfig({
       '@services': path.resolve(process.cwd(), './src/services'),
       '@store': path.resolve(process.cwd(), './src/store'),
       '@layouts': path.resolve(process.cwd(), './src/layouts'),
-      '@utils': path.resolve(process.cwd(), './src/utils')
+      '@utils': path.resolve(process.cwd(), './src/utils'),
+      '@bookshop/shared/product': path.resolve(process.cwd(), '../../packages/shared/src/product.js')
     }
   },
   server: {

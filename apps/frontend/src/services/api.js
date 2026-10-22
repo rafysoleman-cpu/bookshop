@@ -191,57 +191,11 @@ export const paymentAPI = {
 }
 
 import uploadService from './uploadService.js'
+import { buildProductFormData } from '@bookshop/shared/product'
 
-// Fields the backend parses from JSON strings on multipart requests
-const MULTIPART_JSON_FIELDS = [
-  'dimensions',
-  'tags',
-  'weight',
-  'inventory',
-  'seo',
-  'subcategories',
-  'imagesJson',
-  'uploadedImages',
-  'video',
-  'variants',
-  'flashSale',
-  'shipping',
-  'tax'
-]
-
-/**
- * Serialise a product into multipart form data.
- * Nested structures are stringified because the backend only parses the
- * whitelisted JSON fields back into real values.
- */
-export const buildProductFormData = (productData = {}, files = []) => {
-  const formData = new FormData()
-
-  Object.entries(productData).forEach(([key, value]) => {
-    if (value === undefined || value === null) {
-      if (MULTIPART_JSON_FIELDS.includes(key)) formData.append(key, JSON.stringify(null))
-      return
-    }
-
-    if (MULTIPART_JSON_FIELDS.includes(key)) {
-      formData.append(key, JSON.stringify(value))
-      return
-    }
-
-    if (typeof value === 'object') {
-      formData.append(key, JSON.stringify(value))
-      return
-    }
-
-    formData.append(key, String(value))
-  })
-
-  files.forEach((file) => {
-    if (file instanceof File) formData.append('images', file)
-  })
-
-  return formData
-}
+// The multipart serialiser lives in @bookshop/shared so the admin forms, the
+// client validation and the backend share one definition of every field.
+export { buildProductFormData }
 
 export const adminAPI = {
   getDashboard: () => api.get('/admin/dashboard'),

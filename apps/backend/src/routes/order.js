@@ -122,7 +122,7 @@ router.post('/', validate(createOrderSchema), async (req, res, next) => {
         product.inventory.quantity -= item.quantity;
       }
       
-      await product.save();
+      await product.save({ validateBeforeSave: false });
     }
     
     // Update coupon usage
@@ -264,7 +264,7 @@ router.put('/:id/cancel', async (req, res, next) => {
         product.inventory.quantity += item.quantity;
       }
       
-      await product.save();
+      await product.save({ validateBeforeSave: false });
     }
     
     res.json({

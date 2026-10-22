@@ -1,13 +1,15 @@
-const OBJECT_ID_PATTERN = /^[0-9a-fA-F]{24}$/;
+import {
+  BOOK_FORMATS,
+  DIMENSION_UNITS,
+  MAX_PRODUCT_IMAGES,
+  MAX_VARIANT_OPTIONS,
+  OBJECT_ID_PATTERN,
+  PRODUCT_STATUSES,
+  PRODUCT_VISIBILITIES,
+  WEIGHT_UNITS
+} from '@bookshop/shared/product';
 
-const PRODUCT_STATUSES = ['draft', 'active', 'archived', 'deleted'];
-const PRODUCT_VISIBILITIES = ['public', 'private', 'hidden'];
-const BOOK_FORMATS = ['hardcover', 'paperback', 'ebook', 'audiobook'];
-const WEIGHT_UNITS = ['kg', 'g', 'lb', 'oz'];
-const DIMENSION_UNITS = ['cm', 'in'];
-
-export const MAX_PRODUCT_IMAGES = 10;
-export const MAX_VARIANT_OPTIONS = 50;
+export { MAX_PRODUCT_IMAGES, MAX_VARIANT_OPTIONS };
 
 const isPlainObject = (value) =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -44,12 +46,6 @@ export const parseBoolean = (value) => {
 export const parseText = (value) => {
   if (value === undefined || value === null) return undefined;
   return typeof value === 'string' ? value.trim() : String(value).trim();
-};
-
-const parseUniqueText = (value) => {
-  const parsed = parseText(value);
-  if (parsed === undefined) return undefined;
-  return parsed.length > 0 ? parsed : undefined;
 };
 
 const parseSparseUniqueText = (value) => {
@@ -170,12 +166,16 @@ const parseShipping = (value) => {
   const shipping = { freeShipping: parseBoolean(value.freeShipping) ?? false };
 
   const cost = parseMoney(value.shippingCost);
-  if (cost !== undefined) shipping.shippingCost = cost;
+  if (value.shippingCost === null) shipping.shippingCost = null;
+  else if (cost !== undefined) shipping.shippingCost = cost;
 
   const weight = parseNumber(value.shippingWeight);
-  if (weight !== undefined) shipping.shippingWeight = weight;
+  if (value.shippingWeight === null) shipping.shippingWeight = null;
+  else if (weight !== undefined) shipping.shippingWeight = weight;
 
-  if (isPlainObject(value.shippingDimensions)) {
+  if (value.shippingDimensions === null) {
+    shipping.shippingDimensions = null;
+  } else if (isPlainObject(value.shippingDimensions)) {
     const length = parseNumber(value.shippingDimensions.length);
     const width = parseNumber(value.shippingDimensions.width);
     const height = parseNumber(value.shippingDimensions.height);
@@ -193,7 +193,8 @@ const parseTax = (value) => {
   const tax = { taxable: parseBoolean(value.taxable) ?? true };
 
   const rate = parseNumber(value.taxRate);
-  if (rate !== undefined) tax.taxRate = rate;
+  if (value.taxRate === null) tax.taxRate = null;
+  else if (rate !== undefined) tax.taxRate = rate;
 
   return tax;
 };
@@ -281,6 +282,18 @@ export const ensureSingleMainImage = (images) => {
   }));
 };
 
+/**
+ * Like `put`, but an explicit `null` is meaningful: it means "clear this
+ * field". The route turns these nulls into `$unset` operations.
+ */
+const putOrClear = (target, key, rawValue, parser) => {
+  if (rawValue === null) {
+    target[key] = null;
+    return;
+  }
+  put(target, key, parser(rawValue));
+};
+
 export const buildProductUpdate = (body, existingProduct) => {
   const update = {};
 
@@ -291,17 +304,17 @@ export const buildProductUpdate = (body, existingProduct) => {
   put(update, 'author', parseText(body.author));
   put(update, 'isbn', parseSparseUniqueText(body.isbn));
   put(update, 'publisher', parseText(body.publisher));
-  put(update, 'pages', parseNumber(body.pages));
+  putOrClear(update, 'pages', body.pages, parseNumber);
   put(update, 'format', parseEnumValue(body.format, BOOK_FORMATS));
   put(update, 'language', parseText(body.language));
   put(update, 'edition', parseText(body.edition));
-  put(update, 'publishedDate', parseDate(body.publishedDate));
-  put(update, 'sku', parseUniqueText(body.sku));
+  putOrClear(update, 'publishedDate', body.publishedDate, parseDate);
+  put(update, 'sku', parseSparseUniqueText(body.sku));
   put(update, 'barcode', parseSparseUniqueText(body.barcode));
 
   put(update, 'price', parseMoney(body.price));
-  put(update, 'compareAtPrice', parseMoney(body.compareAtPrice));
-  put(update, 'costPrice', parseMoney(body.costPrice));
+  putOrClear(update, 'compareAtPrice', body.compareAtPrice, parseMoney);
+  putOrClear(update, 'costPrice', body.costPrice, parseMoney);
 
   if (body.category !== undefined) {
     const category = parseText(body.category);
@@ -315,8 +328,8 @@ export const buildProductUpdate = (body, existingProduct) => {
   put(update, 'tags', parseStringList(body.tags));
 
   put(update, 'inventory', parseInventory(body.inventory, existingProduct?.inventory));
-  put(update, 'weight', parseWeight(body.weight));
-  put(update, 'dimensions', parseDimensions(body.dimensions));
+  putOrClear(update, 'weight', body.weight, parseWeight);
+  putOrClear(update, 'dimensions', body.dimensions, parseDimensions);
   put(update, 'seo', parseSeo(body.seo));
   put(update, 'video', parseVideo(body.video));
   put(update, 'variants', parseVariants(body.variants));
@@ -331,6 +344,72 @@ export const buildProductUpdate = (body, existingProduct) => {
   }
 
   return Object.fromEntries(Object.entries(update).filter(([, value]) => value !== undefined));
+};
+
+/** Mark exactly one image as the main image. */
+export const applyMainImage = (images, index = 0) => {
+  const list = Array.isArray(images) ? images : [];
+  if (list.length === 0) return [];
+
+  const safeIndex =
+    Number.isInteger(index) && index >= 0 && index < list.length ? index : 0;
+
+  return list.map((image, position) => ({ ...image, isMain: position === safeIndex }));
+};
+
+/**
+ * Normalise a create payload exactly like an update payload so both routes
+ * store the same shapes. Defaults mirror the Mongoose schema defaults.
+ */
+export const buildProductCreate = (body, uploadedImages = [], mainImageIndex = 0) => {
+  const create = buildProductUpdate(body, null);
+
+  create.status = create.status ?? 'draft';
+  create.visibility = create.visibility ?? 'public';
+  create.featured = create.featured ?? false;
+  create.tags = create.tags ?? [];
+  create.inventory = create.inventory ?? {
+    quantity: 0,
+    trackQuantity: true,
+    allowBackorder: false,
+    lowStockThreshold: 10
+  };
+
+  // Unique sparse indexes must not contain a null value (only a missing one).
+  ['isbn', 'sku', 'barcode'].forEach((field) => {
+    if (create[field] === null) delete create[field];
+  });
+
+  // JSON clients may send the image list themselves; uploads always arrive as
+  // files. Either way exactly one image ends up flagged as main.
+  const images = Array.isArray(create.images) ? create.images : uploadedImages;
+  create.images = applyMainImage(images, mainImageIndex);
+
+  return create;
+};
+
+/**
+ * `buildProductUpdate` returns `null` for fields the admin explicitly cleared.
+ * Mongo cannot store a useful null for nested objects, so those paths are
+ * unset before assigning the rest of the update.
+ */
+export const splitClearedPaths = (update) => {
+  const assignable = { ...update };
+  const cleared = [];
+
+  Object.entries(assignable).forEach(([key, value]) => {
+    if (value === null) {
+      cleared.push(key);
+      delete assignable[key];
+    }
+  });
+
+  if (assignable.shipping && assignable.shipping.shippingDimensions === null) {
+    cleared.push('shipping.shippingDimensions');
+    delete assignable.shipping.shippingDimensions;
+  }
+
+  return { assignable, cleared };
 };
 
 export const getRemovedImages = (existingImages, nextImages) => {

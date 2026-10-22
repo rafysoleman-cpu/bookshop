@@ -1,9 +1,14 @@
 {
   "name": "@bookshop/shared",
   "version": "1.0.0",
-  "description": "Shared utilities and types",
+  "description": "Shared utilities, product field rules and validation",
   "main": "index.js",
   "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./product": "./src/product.js",
+    "./productJoi": "./src/productJoi.js"
+  },
   "scripts": {
     "build": "echo 'No build needed for shared package'",
     "lint": "eslint .",

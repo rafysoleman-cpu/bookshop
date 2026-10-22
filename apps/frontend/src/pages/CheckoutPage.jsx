@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { 
-  Truck, 
-  Shield, 
-  ChevronRight, 
+import {
+  Truck,
+  Shield,
+  ChevronRight,
   Plus,
   Minus,
   MapPin,
@@ -23,7 +23,7 @@ const CheckoutPage = () => {
   const { user, isAuthenticated } = useAuthStore()
   const { subtotal, itemCount } = useCartStore()
   const queryClient = useQueryClient()
-  
+
   const [currentStep, setCurrentStep] = useState(1)
   const [shippingAddress, setShippingAddress] = useState({
     name: '',
@@ -77,7 +77,7 @@ const CheckoutPage = () => {
       onSuccess: (data) => {
         toast.success('Order created successfully!')
         queryClient.invalidateQueries('cart')
-        
+
         navigate(`/orders/${data.data.data._id}`)
       },
       onError: (error) => {
@@ -132,22 +132,22 @@ const CheckoutPage = () => {
   }
 
   const validateShippingInfo = () => {
-    return shippingAddress.name && 
-           shippingAddress.phone && 
-           shippingAddress.address && 
-           shippingAddress.city && 
-           shippingAddress.postalCode && 
-           shippingAddress.country
+    return shippingAddress.name &&
+      shippingAddress.phone &&
+      shippingAddress.address &&
+      shippingAddress.city &&
+      shippingAddress.postalCode &&
+      shippingAddress.country
   }
 
   const validateBillingInfo = () => {
     if (sameAsShipping) return true
-    return billingAddress.name && 
-           billingAddress.phone && 
-           billingAddress.address && 
-           billingAddress.city && 
-           billingAddress.postalCode && 
-           billingAddress.country
+    return billingAddress.name &&
+      billingAddress.phone &&
+      billingAddress.address &&
+      billingAddress.city &&
+      billingAddress.postalCode &&
+      billingAddress.country
   }
 
   const handleNextStep = () => {
@@ -208,16 +208,14 @@ const CheckoutPage = () => {
           <div className="flex items-center justify-center space-x-4">
             {[1, 2, 3, 4].map((step) => (
               <div key={step} className="flex items-center">
-                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ${
-                  currentStep >= step 
-                    ? 'bg-primary-600 text-white' 
-                    : 'bg-gray-200 dark:bg-slate-700 text-gray-600 dark:text-slate-400'
-                }`}>
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ${currentStep >= step
+                  ? 'bg-primary-600 text-white'
+                  : 'bg-gray-200 dark:bg-slate-700 text-gray-600 dark:text-slate-400'
+                  }`}>
                   {step}
                 </div>
-                <span className={`ml-2 text-sm ${
-                  currentStep >= step ? 'text-primary-600 dark:text-primary-400' : 'text-gray-600 dark:text-slate-400'
-                }`}>
+                <span className={`ml-2 text-sm ${currentStep >= step ? 'text-primary-600 dark:text-primary-400' : 'text-gray-600 dark:text-slate-400'
+                  }`}>
                   {step === 1 && 'Shipping'}
                   {step === 2 && 'Billing'}
                   {step === 3 && 'Payment'}
@@ -238,7 +236,7 @@ const CheckoutPage = () => {
             {currentStep === 1 && (
               <div className="bg-white dark:bg-slate-800 rounded-lg p-6 border border-gray-200 dark:border-slate-700">
                 <h2 className="text-xl font-semibold text-gray-900 dark:text-slate-100 mb-6">Shipping Information</h2>
-                
+
                 {/* Saved Addresses */}
                 {addresses.length > 0 && (
                   <div className="mb-6">
@@ -297,7 +295,7 @@ const CheckoutPage = () => {
                       />
                     </div>
                   </div>
-                  
+
                   <div>
                     <label className="block text-sm font-medium text-gray-700 dark:text-slate-300 mb-1">
                       Address
@@ -310,7 +308,7 @@ const CheckoutPage = () => {
                       placeholder="123 Main St"
                     />
                   </div>
-                  
+
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 dark:text-slate-300 mb-1">
@@ -366,7 +364,7 @@ const CheckoutPage = () => {
             {currentStep === 2 && (
               <div className="bg-white dark:bg-slate-800 rounded-lg p-6 border border-gray-200 dark:border-slate-700">
                 <h2 className="text-xl font-semibold text-gray-900 dark:text-slate-100 mb-6">Billing Information</h2>
-                
+
                 <div className="mb-6">
                   <label className="flex items-center space-x-2">
                     <input
@@ -409,7 +407,7 @@ const CheckoutPage = () => {
                         />
                       </div>
                     </div>
-                    
+
                     <div>
                       <label className="block text-sm font-medium text-gray-700 dark:text-slate-300 mb-1">
                         Address
@@ -422,7 +420,7 @@ const CheckoutPage = () => {
                         placeholder="123 Main St"
                       />
                     </div>
-                    
+
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       <div>
                         <label className="block text-sm font-medium text-gray-700 dark:text-slate-300 mb-1">
@@ -479,7 +477,7 @@ const CheckoutPage = () => {
             {currentStep === 3 && (
               <div className="bg-white dark:bg-slate-800 rounded-lg p-6 border border-gray-200 dark:border-slate-700">
                 <h2 className="text-xl font-semibold text-gray-900 dark:text-slate-100 mb-6">Payment Method</h2>
-                
+
                 <div className="space-y-4">
                   <label className="flex items-center space-x-3 p-4 border border-gray-200 dark:border-slate-700 rounded-lg">
                     <input
@@ -513,7 +511,7 @@ const CheckoutPage = () => {
             {currentStep === 4 && (
               <div className="bg-white dark:bg-slate-800 rounded-lg p-6 border border-gray-200 dark:border-slate-700">
                 <h2 className="text-xl font-semibold text-gray-900 dark:text-slate-100 mb-6">Review Your Order</h2>
-                
+
                 {/* Order Items */}
                 <div className="mb-6">
                   <h3 className="font-medium text-gray-900 dark:text-slate-100 mb-4">Order Items ({itemCount})</h3>
@@ -590,32 +588,32 @@ const CheckoutPage = () => {
           <div className="lg:col-span-1">
             <div className="bg-white dark:bg-slate-800 rounded-lg p-6 border border-gray-200 dark:border-slate-700 sticky top-4">
               <h3 className="font-semibold text-gray-900 dark:text-slate-100 mb-4">Order Summary</h3>
-              
+
               <div className="space-y-3">
                 <div className="flex justify-between">
                   <span className="text-gray-600 dark:text-slate-400">Subtotal ({itemCount} items)</span>
                   <span className="font-medium">${(subtotal || 0).toFixed(2)}</span>
                 </div>
-                
+
                 {discount > 0 && (
                   <div className="flex justify-between text-success-600 dark:text-success-400">
                     <span>Discount</span>
                     <span className="font-medium">-${discount.toFixed(2)}</span>
                   </div>
                 )}
-                
+
                 <div className="flex justify-between">
                   <span className="text-gray-600 dark:text-slate-400">Tax</span>
                   <span className="font-medium">${calculateTax().toFixed(2)}</span>
                 </div>
-                
+
                 <div className="flex justify-between">
                   <span className="text-gray-600 dark:text-slate-400">Shipping</span>
                   <span className="font-medium">
                     {calculateShipping() === 0 ? 'Free' : `$${calculateShipping().toFixed(2)}`}
                   </span>
                 </div>
-                
+
                 <div className="border-t border-gray-200 dark:border-slate-700 pt-3">
                   <div className="flex justify-between">
                     <span className="text-lg font-bold text-gray-900 dark:text-slate-100">Total</span>
