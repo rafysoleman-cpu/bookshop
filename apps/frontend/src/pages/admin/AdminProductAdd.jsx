@@ -23,6 +23,65 @@ import EnterpriseUploadProgressBar from '../../components/EnterpriseUploadProgre
 import toast from 'react-hot-toast'
 import { useSocket } from '../../contexts/SocketContext'
 
+// Keep this in sync with AdminProducts.jsx. The add page writes the record
+// before navigating; the products page reads it once and then relies on socket
+// events. The request promise below is the fallback when the socket is down.
+const PRODUCT_UPLOAD_KEYS = {
+  data: 'productUploadData',
+  progress: 'productUploadProgress',
+  error: 'productUploadError'
+}
+
+const readStoredProductUpload = () => {
+  try {
+    const raw = sessionStorage.getItem(PRODUCT_UPLOAD_KEYS.data)
+    if (!raw) return null
+    return JSON.parse(raw)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Settle the upload record after the background request finishes. Runs even
+ * though this component is already unmounted, which is what guarantees the
+ * progress bar is cleaned up and the list refreshes when the socket fails.
+ */
+const finalizeBackgroundUpload = (uploadId, status, details = {}) => {
+  const stored = readStoredProductUpload()
+
+  // AdminProducts may already have handled this upload via WebSocket.
+  if (!stored || (uploadId && stored.uploadId && stored.uploadId !== uploadId)) return
+
+  if (status === 'completed') {
+    sessionStorage.setItem(
+      PRODUCT_UPLOAD_KEYS.data,
+      JSON.stringify({ ...stored, status: 'completed', completedAt: Date.now() })
+    )
+    sessionStorage.setItem(PRODUCT_UPLOAD_KEYS.progress, '100')
+    sessionStorage.removeItem(PRODUCT_UPLOAD_KEYS.error)
+    // These snapshots can hold base64 previews; they are only needed on retry.
+    sessionStorage.removeItem(`retry_${stored.uploadId}`)
+    sessionStorage.removeItem(`previews_${stored.uploadId}`)
+  } else {
+    const message = details.message || 'Product creation failed'
+    sessionStorage.setItem(
+      PRODUCT_UPLOAD_KEYS.data,
+      JSON.stringify({ ...stored, status: 'error', message })
+    )
+    sessionStorage.setItem(
+      PRODUCT_UPLOAD_KEYS.error,
+      JSON.stringify({ error: message, uploadId: stored.uploadId, timestamp: Date.now() })
+    )
+  }
+
+  window.dispatchEvent(
+    new CustomEvent(`productUpload:${status}`, {
+      detail: { uploadId: stored.uploadId, ...details }
+    })
+  )
+}
+
 const AdminProductAdd = () => {
   const navigate = useNavigate()
   const location = useLocation()
@@ -547,17 +606,21 @@ useEffect(() => {
     try {
       const uploadId = uploadService.generateUploadId()
       const formDataToSubmit = prepareFormData(uploadId)
-      
-      // Store upload data in sessionStorage for AdminProducts page
+      const imageCount = formDataToSubmit.getAll('images')?.length || 0
+
+      // Store upload data in sessionStorage for AdminProducts page. This is
+      // what makes the progress bar survive the route change below.
       const uploadInfo = {
         uploadId,
         productName: formDataToSubmit.get('name') || 'Product',
-        imageCount: formDataToSubmit.getAll('images')?.length || 0,
+        imageCount,
+        totalImages: imageCount,
         startTime: Date.now(),
         status: 'started'
       }
-      sessionStorage.setItem('productUploadData', JSON.stringify(uploadInfo))
-      sessionStorage.setItem('productUploadProgress', '0')
+      sessionStorage.setItem(PRODUCT_UPLOAD_KEYS.data, JSON.stringify(uploadInfo))
+      sessionStorage.setItem(PRODUCT_UPLOAD_KEYS.progress, '5')
+      sessionStorage.removeItem(PRODUCT_UPLOAD_KEYS.error)
       
       setUploadState(prev => ({
         ...prev,
@@ -573,15 +636,36 @@ useEffect(() => {
       // Save form data for recovery before upload
       uploadRecoveryService.saveUploadData(formDataToSubmit, uploadId)
       
-      // Navigate immediately to products page - upload continues in background
+      // Navigate immediately - the upload continues in the background and
+      // AdminProducts renders the realtime progress bar.
       navigate('/admin/products')
       
-      // Start the upload in background
-      createProductMutation.mutateAsync(formDataToSubmit)
+      // Attach the settlement handlers to the promise itself: they still run
+      // after this component unmounts, unlike mutation observer callbacks.
+      createProductMutation
+        .mutateAsync(formDataToSubmit)
+        .then((response) => {
+          finalizeBackgroundUpload(uploadId, 'completed', {
+            productId: response?.data?.data?.product?._id
+          })
+        })
+        .catch((error) => {
+          const apiError = error?.originalError || error
+          const responseData = apiError?.response?.data
+          finalizeBackgroundUpload(uploadId, 'failed', {
+            message:
+              responseData?.error ||
+              responseData?.message ||
+              apiError?.message ||
+              'Product creation failed'
+          })
+        })
+        .finally(() => {
+          isSubmittingRef.current = false
+        })
+      return
     } catch (error) {
       console.error('❌ Upload submission failed:', error)
-    } finally {
-      // Reset submission ref
       isSubmittingRef.current = false
     }
   }
@@ -626,6 +710,13 @@ useEffect(() => {
     
     // Add all basic fields 
     Object.keys(formData).forEach(key => {
+      const value = formData[key]
+      // Empty optional fields must not be sent: Joi rejects '' for numbers
+      // (pages, compareAtPrice, costPrice) and Mongoose cannot cast '' to a
+      // Number. Required fields are still sent so the API reports them.
+      const isEmpty = value === '' || value === null || value === undefined
+      const isRequiredField = ['name', 'author', 'price', 'categoryId'].includes(key)
+
       if (key === 'dimensions') {
         // Convert dimensions to numbers for backend validation
         const dimensionsObj = {
@@ -650,18 +741,25 @@ useEffect(() => {
         }))
       } else if (key === 'comparePrice') {
         // Map frontend field to backend field name
-        formDataToSubmit.append('compareAtPrice', String(formData[key]))
+        if (!isEmpty) {
+          formDataToSubmit.append('compareAtPrice', String(formData[key]))
+        }
       } else if (key === 'costPrice') {
-        formDataToSubmit.append('costPrice', String(formData[key]))
+        if (!isEmpty) {
+          formDataToSubmit.append('costPrice', String(formData[key]))
+        }
       } else if (key === 'price') {
         formDataToSubmit.append('price', String(formData[key]))
       } else if (key !== 'images' && key !== 'quantity' && key !== 'trackQuantity' && key !== 'allowBackorder' && key !== 'seoTitle' && key !== 'seoDescription') {
-        // Use the unique slug for the slug field
+        // The slug is generated above, so it must always be sent.
         if (key === 'slug') {
           formDataToSubmit.append(key, finalSlug)
-        } else {
-          formDataToSubmit.append(key, formData[key])
+          return
         }
+
+        if (isEmpty && !isRequiredField) return
+
+        formDataToSubmit.append(key, formData[key])
       }
     })
 

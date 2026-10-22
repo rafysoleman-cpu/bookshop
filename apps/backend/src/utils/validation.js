@@ -18,6 +18,12 @@ const JSON_BODY_FIELDS = [
   'tax'
 ];
 
+// Untouched optional inputs are sent as empty strings by multipart forms. Joi
+// rejects '' for number fields and Mongoose cannot cast it, so treat them as
+// "not provided". barcode is included because it is a unique sparse index and
+// multiple '' values would collide.
+const OPTIONAL_EMPTY_FIELDS = ['pages', 'compareAtPrice', 'costPrice', 'barcode'];
+
 const PRODUCT_STATUSES = ['draft', 'active', 'archived', 'deleted'];
 const PRODUCT_VISIBILITIES = ['public', 'private', 'hidden'];
 
@@ -72,6 +78,12 @@ export const validate = (schema) => {
       });
     }
     
+    // Normalise empty optional fields before validation so an untouched
+    // "Pages" or "Compare at price" input cannot fail the whole create.
+    OPTIONAL_EMPTY_FIELDS.forEach((field) => {
+      if (data[field] === '') delete data[field];
+    });
+
     const { error } = schema.validate(data, { abortEarly: false, convert: true });
     if (error) {
       const details = error.details.map(detail => ({

@@ -11,7 +11,8 @@
     "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
     "dev:backend": "npm run dev --workspace=apps/backend",
     "dev:frontend": "npm run dev --workspace=apps/frontend",
-    "devall": "concurrently \"wsl sudo service redis-server start\" \"npm run dev:backend\" \"npm run dev:frontend\" --names \"REDIS,BACKEND,FRONTEND\" --prefix-colors \"red,green,blue\"",
+    "devall": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\" --names \"BACKEND,FRONTEND\" --prefix-colors \"green,blue\"",
+    "redis": "wsl -u root sh -c \"service redis-server start && redis-cli ping\"",
     "build": "npm run build --workspaces",
     "lint": "eslint . --ext .js,.jsx",
     "format": "prettier --write ."

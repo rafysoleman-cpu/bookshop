@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { 
   Search, 
@@ -23,6 +23,41 @@ import { useSocket } from '../../contexts/SocketContext'
 import { invalidateCatalog } from '../../utils/queryKeys'
 import toast from 'react-hot-toast'
 
+// Shared storage contract with AdminProductAdd. The add page writes these
+// before navigating here so the progress bar survives the route change.
+const UPLOAD_STORAGE_KEYS = {
+  data: 'productUploadData',
+  progress: 'productUploadProgress',
+  error: 'productUploadError'
+}
+
+// Ignore leftovers from a previous session instead of showing a ghost bar.
+const MAX_UPLOAD_AGE_MS = 10 * 60 * 1000
+// If no progress event arrives for this long, clear the bar and offer a retry.
+// Generous on purpose: the server cannot emit anything until the browser has
+// finished sending the request body, which can take a while for many images.
+const UPLOAD_INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000
+
+const readStoredUpload = () => {
+  try {
+    const raw = sessionStorage.getItem(UPLOAD_STORAGE_KEYS.data)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    return parsed && parsed.uploadId ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+const clearUploadStorage = () => {
+  sessionStorage.removeItem(UPLOAD_STORAGE_KEYS.data)
+  sessionStorage.removeItem(UPLOAD_STORAGE_KEYS.progress)
+  sessionStorage.removeItem(UPLOAD_STORAGE_KEYS.error)
+}
+
+const isFreshUpload = (upload) =>
+  Boolean(upload) && Date.now() - (Number(upload.startTime) || 0) < MAX_UPLOAD_AGE_MS
+
 const AdminProducts = () => {
   // TEST FLAG - Set to true to see progress bar for testing, set to false for normal operation
   const SHOW_BAR_FOR_TESTING = false
@@ -37,13 +72,17 @@ const AdminProducts = () => {
   const [uploadData, setUploadData] = useState(null)
   const [showError, setShowError] = useState(false)
   const [errorData, setErrorData] = useState(null)
-  const [earlyWebSocketEvents, setEarlyWebSocketEvents] = useState([]) // Buffer for early events
   const [currentImageIndex, setCurrentImageIndex] = useState(0) // Track current image being uploaded
   const [totalImages, setTotalImages] = useState(0) // Track total images
   const [deleteModal, setDeleteModal] = useState({ isOpen: false, productId: null, productName: '' })
   const [deletingProductId, setDeletingProductId] = useState(null) // Track which product is being deleted
   const queryClient = useQueryClient()
   const { socket, connected } = useSocket()
+
+  // Id of the upload this page is currently showing. Kept in a ref so socket
+  // callbacks never need to re-subscribe when the state changes.
+  const currentUploadIdRef = useRef(null)
+  const completedUploadIdsRef = useRef(new Set())
 
   const { data: productsData, isLoading, error } = useQuery(
     ['adminProducts', currentPage, searchQuery, statusFilter],
@@ -69,423 +108,310 @@ const AdminProducts = () => {
                      productsData?.pagination || 
                      productsData?.data?.data?.pagination
 
-  // Debug: Log actual response structure
-  console.log('Products API Response:', productsData)
-  console.log('Extracted Products:', products)
-  console.log('Pagination:', pagination)
-
   // Scroll to top on component mount
   useEffect(() => {
     window.scrollTo(0, 0)
   }, [])
 
-  // WebSocket integration for real-time upload progress
+  /**
+   * Single place that tears down the progress UI. Called by:
+   *  - the WebSocket `completed` / `error` events
+   *  - the background request promise in AdminProductAdd (custom event)
+   *  - the inactivity watchdog below
+   * Repeated calls for the same upload are ignored.
+   */
+  const finalizeUpload = useCallback(({ uploadId, success, message }) => {
+    const effectiveId = uploadId || currentUploadIdRef.current
+
+    if (effectiveId) {
+      if (success && completedUploadIdsRef.current.has(effectiveId)) return
+      if (!success && completedUploadIdsRef.current.has(effectiveId)) return
+      if (success) completedUploadIdsRef.current.add(effectiveId)
+    }
+
+    clearUploadStorage()
+    if (effectiveId && success) {
+      // The retry snapshot is only needed if this upload fails.
+      sessionStorage.removeItem(`retry_${effectiveId}`)
+      sessionStorage.removeItem(`previews_${effectiveId}`)
+    }
+    currentUploadIdRef.current = null
+    setIsUploading(false)
+    setUploadProgress(0)
+    setUploadData(null)
+    setCurrentImageIndex(0)
+    setTotalImages(0)
+
+    if (success) {
+      setErrorData(null)
+      setShowError(false)
+      toast.success('Book created successfully!')
+      invalidateCatalog(queryClient)
+      queryClient.invalidateQueries(['adminProducts'])
+      queryClient.refetchQueries(['adminProducts'])
+      return
+    }
+
+    const failure = {
+      error: message || 'Product creation failed. Please try again.',
+      uploadId: effectiveId,
+      timestamp: Date.now()
+    }
+    setErrorData(failure)
+    setShowError(true)
+    sessionStorage.setItem(UPLOAD_STORAGE_KEYS.error, JSON.stringify(failure))
+  }, [queryClient])
+
+  /**
+   * Socket handler. It reads everything from the event and uses refs /
+   * functional updates, so the listener never has to be re-created when
+   * progress changes (that churn was the render loop).
+   */
+  const handleUploadProgress = useCallback((event = {}) => {
+    const status = event.status || event.stage
+    const uploadId = event.uploadId || currentUploadIdRef.current
+
+    // Only handle events for the upload this page started. Without this the
+    // shared `user:user123` room would show another tab's upload here too.
+    const isTrackedUpload =
+      Boolean(uploadId) &&
+      (currentUploadIdRef.current
+        ? currentUploadIdRef.current === uploadId
+        : readStoredUpload()?.uploadId === uploadId)
+
+    if (!isTrackedUpload) return
+
+    if (uploadId && completedUploadIdsRef.current.has(uploadId)) return
+
+    if (status === 'completed') {
+      finalizeUpload({ uploadId, success: true })
+      return
+    }
+
+    if (status === 'error') {
+      finalizeUpload({
+        uploadId,
+        success: false,
+        message: event.message || event.error || 'Upload failed'
+      })
+      return
+    }
+
+    const numericProgress = Number(event.progress)
+    const total = Number(event.totalImages ?? event.total ?? 0)
+    const current = Number(event.currentImage ?? event.current ?? 0)
+
+    if (status === 'started') {
+      const info = {
+        uploadId,
+        productName: event.productName || 'Product',
+        imageCount: total,
+        totalImages: total,
+        startTime: Date.now(),
+        status: 'started'
+      }
+
+      currentUploadIdRef.current = uploadId || null
+      setUploadData(info)
+      setIsUploading(true)
+      setUploadProgress(Number.isFinite(numericProgress) ? numericProgress : 0)
+      setCurrentImageIndex(0)
+      setTotalImages(total)
+      sessionStorage.setItem(UPLOAD_STORAGE_KEYS.data, JSON.stringify(info))
+      sessionStorage.setItem(
+        UPLOAD_STORAGE_KEYS.progress,
+        String(Number.isFinite(numericProgress) ? numericProgress : 0)
+      )
+      return
+    }
+
+    // 'uploading' / 'processing' (or any other in-flight stage)
+    setUploadData((previous) => {
+      const next = {
+        ...(previous || {
+          uploadId,
+          productName: event.productName || 'Product',
+          imageCount: total,
+          startTime: Date.now()
+        }),
+        status,
+        totalImages: total || previous?.totalImages || 0
+      }
+      sessionStorage.setItem(UPLOAD_STORAGE_KEYS.data, JSON.stringify(next))
+      return next
+    })
+
+    setIsUploading(true)
+    if (Number.isFinite(numericProgress)) {
+      setUploadProgress(numericProgress)
+      sessionStorage.setItem(UPLOAD_STORAGE_KEYS.progress, String(numericProgress))
+    }
+    if (current > 0) setCurrentImageIndex(current)
+    if (total > 0) setTotalImages(total)
+    if (uploadId && !currentUploadIdRef.current) currentUploadIdRef.current = uploadId
+  }, [finalizeUpload])
+
+  // Restore an in-flight (or just-finished) upload exactly once. No polling:
+  // from here on the UI is driven by socket events and by the request promise
+  // that AdminProductAdd keeps alive after navigating away.
   useEffect(() => {
-    console.log('🔌 Setting up WebSocket listener...', { 
-      socket: !!socket, 
-      socketType: typeof socket,
-      socketMethods: socket ? Object.getOwnPropertyNames(Object.getPrototypeOf(socket)) : 'null',
-      connected,
-      isUploading, 
-      uploadData 
-    });
-    
-    if (!socket) {
-      console.log('❌ No socket available');
-      return;
-    }
+    const stored = readStoredUpload()
+    const storedProgress = Number(sessionStorage.getItem(UPLOAD_STORAGE_KEYS.progress))
+    const rawError = sessionStorage.getItem(UPLOAD_STORAGE_KEYS.error)
+    let activeUploadId = null
 
-    // Wait for socket to be connected before setting up listeners
-    if (!connected) {
-      console.log('⏳ Socket not connected yet, waiting...');
-      return;
-    }
-
-    // Double-check socket has the 'on' method
-    if (typeof socket.on !== 'function') {
-      console.log('❌ Socket does not have "on" method. Available methods:', Object.getOwnPropertyNames(Object.getPrototypeOf(socket)));
-      console.log('🔍 Socket object details:', {
-        socket,
-        constructor: socket.constructor,
-        prototype: Object.getPrototypeOf(socket),
-        isSocketIO: socket.constructor && socket.constructor.name === 'Socket'
-      });
-      return;
-    }
-
-    const handleUploadProgress = (data) => {
-      console.log('📊 Upload progress via WebSocket:', data);
-      
-      try {
-        // If we receive a 'started' event and no upload is active, start the progress bar
-        if (data.status === 'started' && !isUploading && !uploadData) {
-          console.log('🚀 Starting progress bar from WebSocket event:', data);
-          const uploadInfo = {
-            uploadId: data.uploadId,
-            productName: data.productName || 'Unknown Product',
-            imageCount: data.totalImages || 0,
-            startTime: Date.now(),
-            status: 'started'
-          };
-          
-          setUploadData(uploadInfo);
-          setIsUploading(true);
-          setUploadProgress(data.progress || 0);
-          setCurrentImageIndex(0); // Reset current image index
-          setTotalImages(data.totalImages || 0); // Set total images
-          
-          // Store in sessionStorage for persistence
-          sessionStorage.setItem('productUploadData', JSON.stringify(uploadInfo));
-          sessionStorage.setItem('productUploadProgress', (data.progress || 0).toString());
-          
-          // Process any buffered events
-          if (earlyWebSocketEvents.length > 0) {
-            console.log('🔄 Processing buffered WebSocket events:', earlyWebSocketEvents.length);
-            earlyWebSocketEvents.forEach(event => {
-              console.log('🔄 Processing buffered event:', event);
-              if (event.status === 'uploading') {
-                setUploadProgress(event.progress || 0);
-                setCurrentImageIndex(event.currentImage || 0);
-                setTotalImages(event.totalImages || 0);
-                sessionStorage.setItem('productUploadProgress', (event.progress || 0).toString());
-              } else if (event.status === 'processing') {
-                setUploadProgress(event.progress || 0);
-                sessionStorage.setItem('productUploadProgress', (event.progress || 0).toString());
-              } else if (event.status === 'completed') {
-                setIsUploading(false);
-                setUploadProgress(0);
-                setUploadData(null);
-                setCurrentImageIndex(0);
-                setTotalImages(0);
-                sessionStorage.removeItem('productUploadData');
-                sessionStorage.removeItem('productUploadProgress');
-                sessionStorage.removeItem('productUploadError');
-                toast.success('Book created successfully!');
-                invalidateCatalog(queryClient); queryClient.invalidateQueries('adminProducts');
-                queryClient.refetchQueries('adminProducts');
-              } else if (event.status === 'error') {
-                setErrorData({
-                  error: event.message || 'Upload failed',
-                  timestamp: Date.now()
-                });
-                setShowError(true);
-                setIsUploading(false);
-                setUploadProgress(0);
-                setUploadData(null);
-                setCurrentImageIndex(0);
-                setTotalImages(0);
-                sessionStorage.removeItem('productUploadData');
-                sessionStorage.removeItem('productUploadProgress');
-              }
-            });
-            setEarlyWebSocketEvents([]);
-          }
-          return;
-        }
-        
-        // Update progress if we have an active upload
-        if (isUploading && uploadData) {
-          console.log('🔄 Updating progress:', data.progress, '%');
-          // Update progress with real data from backend
-          setUploadProgress(data.progress || 0)
-          
-          // Update current image tracking if available
-          if (data.currentImage && data.totalImages) {
-            setCurrentImageIndex(data.currentImage);
-            setTotalImages(data.totalImages);
-          }
-          
-          // Store real progress in sessionStorage
-          sessionStorage.setItem('productUploadProgress', data.progress.toString())
-          
-          // Handle completion
-          if (data.status === 'completed') {
-            console.log('✅ Upload completed via WebSocket')
-            // Hide progress bar immediately
-            setIsUploading(false)
-            setUploadProgress(0)
-            setUploadData(null)
-            // Clear sessionStorage
-            sessionStorage.removeItem('productUploadData')
-            sessionStorage.removeItem('productUploadProgress')
-            sessionStorage.removeItem('productUploadError')
-            // Show success toast
-            toast.success('Book created successfully!')
-            // Refresh products list
-            invalidateCatalog(queryClient); queryClient.invalidateQueries('adminProducts')
-            queryClient.refetchQueries('adminProducts')
-          }
-          
-          // Handle errors
-          if (data.status === 'error') {
-            console.error('❌ Upload error via WebSocket:', data.message)
-            
-            setErrorData({
-              error: data.message || 'Upload failed',
-              timestamp: Date.now()
-            })
-            setShowError(true)
-            setIsUploading(false)
-            setUploadProgress(0)
-            setUploadData(null)
-            // Clear sessionStorage
-            sessionStorage.removeItem('productUploadData')
-            sessionStorage.removeItem('productUploadProgress')
-          }
-        } else {
-          console.log('⚠️ Received progress but no active upload:', { isUploading, uploadData });
-          // Buffer early events for later processing
-          setEarlyWebSocketEvents(prev => [...prev, data])
-          console.log('📦 Buffered early WebSocket event:', data);
-        }
-      } catch (error) {
-        console.error('❌ Error in handleUploadProgress:', error)
-        
-        // Prevent infinite loop with setUploadData error
-        if (error.message === 'setUploadData is not defined') {
-          console.log('🔄 Ignoring recursive setUploadData error from catch block');
-          return
-        }
-        
-        // Store error in sessionStorage for display
-        sessionStorage.setItem('productUploadError', JSON.stringify({
-          error: error.message || 'Progress tracking failed',
-          isNetworkError: false,
+    if (stored && stored.status === 'completed') {
+      const finishedRecently =
+        Date.now() - (Number(stored.completedAt || stored.startTime) || 0) < 60 * 1000
+      if (stored.uploadId) {
+        completedUploadIdsRef.current.add(stored.uploadId)
+        sessionStorage.removeItem(`retry_${stored.uploadId}`)
+        sessionStorage.removeItem(`previews_${stored.uploadId}`)
+      }
+      clearUploadStorage()
+      invalidateCatalog(queryClient)
+      queryClient.invalidateQueries(['adminProducts'])
+      queryClient.refetchQueries(['adminProducts'])
+      if (finishedRecently) toast.success('Book created successfully!')
+    } else if (stored && stored.status === 'error') {
+      activeUploadId = stored.uploadId || null
+      sessionStorage.removeItem(UPLOAD_STORAGE_KEYS.progress)
+      if (!rawError) {
+        setErrorData({
+          error: stored.message || 'Upload failed',
+          uploadId: activeUploadId,
           timestamp: Date.now()
-        }))
+        })
+        setShowError(true)
+      }
+    } else if (stored && isFreshUpload(stored)) {
+      activeUploadId = stored.uploadId || null
+      currentUploadIdRef.current = activeUploadId
+      setUploadData(stored)
+      setIsUploading(true)
+      setUploadProgress(
+        Number.isFinite(storedProgress) && storedProgress > 0 ? storedProgress : 5
+      )
+      setCurrentImageIndex(Number(stored.currentImage) || 0)
+      setTotalImages(Number(stored.totalImages || stored.imageCount) || 0)
+    } else {
+      // Drop orphaned upload data/progress, but keep a recent error so the
+      // retry overlay can still be restored below.
+      if (stored) sessionStorage.removeItem(UPLOAD_STORAGE_KEYS.data)
+      sessionStorage.removeItem(UPLOAD_STORAGE_KEYS.progress)
+    }
+
+    if (rawError) {
+      try {
+        const parsed = JSON.parse(rawError)
+        const isRecent =
+          Date.now() - (Number(parsed.timestamp) || 0) < MAX_UPLOAD_AGE_MS
+        const isSameUpload =
+          !activeUploadId || !parsed.uploadId || parsed.uploadId === activeUploadId
+
+        if (isRecent && isSameUpload) {
+          setErrorData(parsed)
+          setShowError(true)
+        } else {
+          sessionStorage.removeItem(UPLOAD_STORAGE_KEYS.error)
+        }
+      } catch {
+        sessionStorage.removeItem(UPLOAD_STORAGE_KEYS.error)
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
-    console.log('👂 Adding socket listener for upload:progress...');
+  // One socket listener for the lifetime of the page. It is only re-created
+  // when the socket itself reconnects - never on progress updates.
+  useEffect(() => {
+    if (!socket || !connected || typeof socket.on !== 'function') return undefined
+
     socket.on('upload:progress', handleUploadProgress)
-    
+
     return () => {
-      console.log('🧹 Cleaning up WebSocket listener...');
-      if (socket && typeof socket.off === 'function') {
+      if (typeof socket.off === 'function') {
         socket.off('upload:progress', handleUploadProgress)
       }
     }
-  }, [socket, connected, isUploading, uploadData])
+  }, [socket, connected, handleUploadProgress])
 
-  // Handle upload progress and errors from sessionStorage
+  // AdminProductAdd dispatches these from the background request promise, so
+  // completion is still handled when the socket drops mid-upload.
   useEffect(() => {
-    let interval = null
-    
-    // Don't clear sessionStorage on mount - check if there's active upload data
-    const existingUploadData = sessionStorage.getItem('productUploadData')
-    if (!existingUploadData) {
-      // Only clear if there's no active upload
-      sessionStorage.removeItem('productUploadProgress')
-      sessionStorage.removeItem('productUploadError')
+    const handleCompleted = (event) => {
+      finalizeUpload({ uploadId: event?.detail?.uploadId, success: true })
     }
-    
-    const checkUploadProgress = () => {
-      try {
-        const progress = sessionStorage.getItem('productUploadProgress')
-        const data = sessionStorage.getItem('productUploadData')
-        const error = sessionStorage.getItem('productUploadError')
-        
-        // Debug logging
-        console.log('🔍 Upload Progress Check:', {
-          progress,
-          data: data ? JSON.parse(data) : null,
-          error: error ? JSON.parse(error) : null,
-          isUploading,
-          uploadProgress,
-          uploadData
-        })
-        
-        if (data) {
-          try {
-            const uploadInfo = JSON.parse(data)
-            console.log('📦 Found upload data, setting up progress bar:', uploadInfo);
-            
-            // Safely set upload data with error handling
-            try {
-              setUploadData(uploadInfo)
-              setIsUploading(true)
-              
-              // Set initial progress from sessionStorage
-              if (progress) {
-                setUploadProgress(parseInt(progress))
-              }
-              
-              // Process any buffered WebSocket events
-              if (earlyWebSocketEvents.length > 0) {
-                console.log('🔄 Processing buffered WebSocket events:', earlyWebSocketEvents.length);
-                earlyWebSocketEvents.forEach(event => {
-                  console.log('🔄 Processing buffered event:', event);
-                  // Re-process the event with the now-ready upload state
-                  if (event.stage === 'started') {
-                    setUploadProgress(event.progress || 0)
-                  } else if (event.stage === 'uploading') {
-                    setUploadProgress(event.progress || 0)
-                  } else if (event.stage === 'completed') {
-                    setIsUploading(false)
-                    setUploadProgress(0)
-                    setUploadData(null)
-                    sessionStorage.removeItem('productUploadData')
-                    sessionStorage.removeItem('productUploadProgress')
-                    sessionStorage.removeItem('productUploadError')
-                    toast.success('Book created successfully!')
-                    invalidateCatalog(queryClient); queryClient.invalidateQueries('adminProducts')
-                    queryClient.refetchQueries('adminProducts')
-                  } else if (event.stage === 'error') {
-                    setErrorData({
-                      error: event.error || 'Upload failed',
-                      timestamp: Date.now()
-                    })
-                    setShowError(true)
-                    setIsUploading(false)
-                    setUploadProgress(0)
-                    setUploadData(null)
-                    sessionStorage.removeItem('productUploadData')
-                    sessionStorage.removeItem('productUploadProgress')
-                  }
-                });
-                // Clear the buffer
-                setEarlyWebSocketEvents([])
-              }
-            } catch (setStateError) {
-              console.error('❌ Error setting upload data:', setStateError)
-              return
-            }
-            
-            // Use real progress from API if available, otherwise estimate
-            if (progress && parseInt(progress) > 0) {
-              setUploadProgress(parseInt(progress))
-            } else {
-              // Start with 5% progress to show immediate feedback
-              setUploadProgress(5)
-              sessionStorage.setItem('productUploadProgress', '5')
-            }
-            
-            // Add fallback timeout to clear progress bar if stuck
-            setTimeout(() => {
-              if (uploadProgress === 100 && isUploading) {
-                console.log('⏰ Fallback: Clearing stuck progress bar at 100%');
-                try {
-                  setIsUploading(false)
-                  setUploadProgress(0)
-                  setUploadData(null)
-                } catch (clearError) {
-                  console.error('❌ Error clearing upload state:', clearError)
-                }
-                sessionStorage.removeItem('productUploadData')
-                sessionStorage.removeItem('productUploadProgress')
-                sessionStorage.removeItem('productUploadError')
-                invalidateCatalog(queryClient); queryClient.invalidateQueries('adminProducts')
-                queryClient.refetchQueries('adminProducts')
-              }
-            }, 8000) // 8 second fallback timeout
-          } catch (parseError) {
-            console.error('❌ Error parsing upload data:', parseError)
-            // Clear corrupted data
-            sessionStorage.removeItem('productUploadData')
-            sessionStorage.removeItem('productUploadProgress')
-            try {
-              setIsUploading(false)
-              setUploadData(null)
-            } catch (clearError) {
-              console.error('❌ Error clearing state after parse error:', clearError)
-            }
-          }
-        }
-        
-        if (error) {
-          try {
-            const errorInfo = JSON.parse(error)
-            console.log('❌ Found upload error:', errorInfo);
-            
-            // Prevent infinite loop with setUploadData error
-            if (errorInfo.error === 'setUploadData is not defined') {
-              console.log('🔄 Clearing recursive setUploadData error');
-              sessionStorage.removeItem('productUploadError')
-              return // Don't display this error to user
-            }
-            
-            setErrorData(errorInfo)
-            setShowError(true)
-            setIsUploading(false)
-            // Clear progress
-            sessionStorage.removeItem('productUploadProgress')
-          } catch (parseError) {
-            console.error('❌ Error parsing error data:', parseError)
-            sessionStorage.removeItem('productUploadError')
-          }
-        }
-        
-        // Stop polling if there's no upload data or error
-        if (!data && !error && interval) {
-          clearInterval(interval)
-          interval = null
-        }
-      } catch (error) {
-        console.error('❌ Error checking upload progress:', error)
-      }
+    const handleFailed = (event) => {
+      finalizeUpload({
+        uploadId: event?.detail?.uploadId,
+        success: false,
+        message: event?.detail?.message
+      })
     }
 
-    // Handle window focus to recheck upload progress
-    const handleWindowFocus = () => {
-      console.log('🔄 Window focused, checking upload progress...')
-      checkUploadProgress()
-    }
+    window.addEventListener('productUpload:completed', handleCompleted)
+    window.addEventListener('productUpload:failed', handleFailed)
 
-    // Check immediately on mount
-    checkUploadProgress()
-    
-    // Also check after short delays to catch any delayed sessionStorage updates
-    setTimeout(checkUploadProgress, 50)
-    setTimeout(checkUploadProgress, 100)
-    setTimeout(checkUploadProgress, 300)
-    
-    // Only start polling if there's actual upload data
-    const hasUploadData = sessionStorage.getItem('productUploadData') || sessionStorage.getItem('productUploadError')
-    if (hasUploadData) {
-      interval = setInterval(checkUploadProgress, 500)
-    }
-    
-    // Add window focus listener
-    window.addEventListener('focus', handleWindowFocus)
-    
     return () => {
-      if (interval) {
-        clearInterval(interval)
-      }
-      window.removeEventListener('focus', handleWindowFocus)
+      window.removeEventListener('productUpload:completed', handleCompleted)
+      window.removeEventListener('productUpload:failed', handleFailed)
     }
-  }, [])
+  }, [finalizeUpload])
 
-  // Clear upload data when component unmounts or on successful load (but not during active uploads)
+  // Watchdog fallback: if the upload goes silent for 10 minutes, clear the bar
+  // instead of leaving the page in a permanent "uploading" state.
   useEffect(() => {
-    if (!isLoading && products.length > 0) {
-      // Only clear upload data if there's no active upload in progress
-      const hasActiveUpload = sessionStorage.getItem('productUploadData') || 
-                           sessionStorage.getItem('productUploadProgress') || 
-                           sessionStorage.getItem('productUploadError');
-      
-      if (!hasActiveUpload) {
-        console.log('🧹 Clearing any lingering upload data...');
-        sessionStorage.removeItem('productUploadData')
-        sessionStorage.removeItem('productUploadProgress')
-        sessionStorage.removeItem('productUploadError')
-        setIsUploading(false)
-        setUploadProgress(0)
-        setUploadData(null)
-      }
-    }
-  }, [isLoading, products.length, isUploading]) // Add isUploading dependency
+    if (!isUploading) return undefined
+
+    const uploadId = uploadData?.uploadId || currentUploadIdRef.current
+    const timeoutId = setTimeout(() => {
+      const stored = readStoredUpload()
+      if (stored && uploadId && stored.uploadId !== uploadId) return
+      finalizeUpload({
+        uploadId,
+        success: false,
+        message: 'The upload stopped responding. Check the book list or retry the upload.'
+      })
+    }, UPLOAD_INACTIVITY_TIMEOUT_MS)
+
+    return () => clearTimeout(timeoutId)
+  }, [isUploading, uploadProgress, uploadData?.uploadId, finalizeUpload])
 
   const handleRetry = () => {
-    const storedData = sessionStorage.getItem('productUploadData')
-    if (storedData) {
-      const uploadInfo = JSON.parse(storedData)
-      // Clear previous error
-      sessionStorage.removeItem('productUploadError')
+    const uploadId =
+      errorData?.uploadId || currentUploadIdRef.current || readStoredUpload()?.uploadId
+
+    if (!uploadId) {
+      toast.error('Upload details have expired. Please create the book again.')
       setShowError(false)
-      // Navigate back to add product page with retry flag and preserved data
-      navigate('/admin/products/add?retry=true&uploadId=' + uploadInfo.uploadId)
+      sessionStorage.removeItem(UPLOAD_STORAGE_KEYS.error)
+      return
     }
+
+    sessionStorage.removeItem(UPLOAD_STORAGE_KEYS.error)
+    setShowError(false)
+    // Retry form data is still stored under retry_<uploadId> in sessionStorage
+    navigate(`/admin/products/add?retry=true&uploadId=${uploadId}`)
+  }
+
+  const handleDismissProgress = () => {
+    const uploadId = uploadData?.uploadId || currentUploadIdRef.current
+    if (uploadId) {
+      completedUploadIdsRef.current.add(uploadId)
+      sessionStorage.removeItem(`retry_${uploadId}`)
+      sessionStorage.removeItem(`previews_${uploadId}`)
+    }
+    clearUploadStorage()
+    currentUploadIdRef.current = null
+    setIsUploading(false)
+    setUploadProgress(0)
+    setUploadData(null)
+    setCurrentImageIndex(0)
+    setTotalImages(0)
+    invalidateCatalog(queryClient)
+    queryClient.invalidateQueries(['adminProducts'])
+    queryClient.refetchQueries(['adminProducts'])
   }
 
   const handleDeleteProduct = (productId, productName) => {
@@ -534,30 +460,32 @@ const AdminProducts = () => {
     }
   }
 
-  if (isLoading) return <LoadingSpinner />
+  // Rendered in both the loading state and the loaded page so the bar is
+  // visible immediately after AdminProductAdd redirects here.
+  const uploadProgressBar = (
+    <div className="relative">
+      <EnterpriseUploadProgressBar
+        isUploading={SHOW_BAR_FOR_TESTING || isUploading}
+        uploadProgress={SHOW_BAR_FOR_TESTING ? 50 : uploadProgress}
+        uploadData={SHOW_BAR_FOR_TESTING ? { productName: 'Test Product', imageCount: 5 } : uploadData}
+        currentImageIndex={SHOW_BAR_FOR_TESTING ? 2 : currentImageIndex}
+        totalImages={SHOW_BAR_FOR_TESTING ? 5 : totalImages}
+        onDismiss={handleDismissProgress}
+      />
+    </div>
+  )
+
+  if (isLoading) return (
+    <div className="container mx-auto px-4 py-8 relative">
+      {uploadProgressBar}
+      <LoadingSpinner />
+    </div>
+  )
 
   return (
     <div className="container mx-auto px-4 py-8 relative">
       {/* Enterprise Upload Progress Bar */}
-      <div className="relative">
-        <EnterpriseUploadProgressBar
-          isUploading={SHOW_BAR_FOR_TESTING || isUploading}
-          uploadProgress={SHOW_BAR_FOR_TESTING ? 50 : uploadProgress}
-          uploadData={SHOW_BAR_FOR_TESTING ? { productName: 'Test Product', imageCount: 5 } : uploadData}
-          currentImageIndex={SHOW_BAR_FOR_TESTING ? 2 : currentImageIndex}
-          totalImages={SHOW_BAR_FOR_TESTING ? 5 : totalImages}
-          onDismiss={() => {
-            setIsUploading(false)
-            setUploadProgress(0)
-            setUploadData(null)
-            sessionStorage.removeItem('productUploadData')
-            sessionStorage.removeItem('productUploadProgress')
-            sessionStorage.removeItem('productUploadError')
-            invalidateCatalog(queryClient); queryClient.invalidateQueries('adminProducts')
-            queryClient.refetchQueries('adminProducts')
-          }}
-        />
-      </div>
+      {uploadProgressBar}
 
       {/* Error Retry Overlay */}
       {showError && errorData && (

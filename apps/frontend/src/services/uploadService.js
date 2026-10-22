@@ -248,6 +248,10 @@ class UploadService {
   enhanceError(error, uploadId) {
     const enhancedError = new Error(error.message)
     enhancedError.originalError = error
+    // Keep the Axios response so callers can read the backend's validation
+    // message instead of only "Request failed with status code 400".
+    enhancedError.response = error.response
+    enhancedError.status = error.response?.status
     enhancedError.uploadId = uploadId
     enhancedError.uploadProgress = this.uploadProgress.get(uploadId) || 0
     enhancedError.uploadDuration = Date.now() - (this.activeUploads.get(uploadId)?.startTime || Date.now())

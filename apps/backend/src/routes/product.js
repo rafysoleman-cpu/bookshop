@@ -192,109 +192,112 @@ router.get('/:idOrSlug', optionalAuth, async (req, res, next) => {
 // @route   POST /api/v1/products
 // @access  Private (Admin)
 router.post('/', protect, authorize('admin'), handleMultipleImageUpload, validate(createProductSchema), async (req, res, next) => {
+  // Same contract as POST /admin/products: reuse the client upload id and emit
+  // the same status/currentImage/totalImages payload into the same user room.
+  const uploadId =
+    (typeof req.body.uploadId === 'string' && req.body.uploadId.trim()) ||
+    `upload_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`
+
+  const productName = req.body.name || 'Product'
+  const totalImages = Array.isArray(req.files) ? req.files.length : 0
+  const userId = 'user123'
+
+  const emitProgress = (payload) =>
+    emitUploadProgress(userId, {
+      uploadId,
+      productName,
+      totalImages,
+      currentImage: 0,
+      ...payload
+    })
+
   try {
-    const productData = { ...req.body };
+    emitProgress({
+      status: 'started',
+      progress: totalImages > 0 ? 5 : 10,
+      message: 'Starting upload...'
+    })
 
-    // Handle image uploads with progress tracking
-    if (req.files && req.files.length > 0) {
-      console.log('🚀 Starting image upload process with', req.files.length, 'files');
-      
-      const uploadService = await getDefaultUploadService();
-      console.log('📸 Upload service loaded:', uploadService.constructor.name);
-      console.log('🔍 Upload service methods:', Object.getOwnPropertyNames(Object.getPrototypeOf(uploadService)));
-      
-      const uploadedImages = [];
-      const totalFiles = req.files.length;
+    const productData = { ...req.body }
+    delete productData.uploadId
 
-      // Upload each image with progress tracking
-      for (let i = 0; i < totalFiles; i++) {
-        const file = req.files[i];
-        console.log(`📤 Processing file ${i + 1}/${totalFiles}:`, file.originalname);
-        
-        // Emit progress for image upload (30-80% range)
-        const progress = 30 + Math.floor((i / totalFiles) * 50);
-        
-        // Emit progress via WebSocket (use socket ID since auth is disabled)
-        console.log('📡 Emitting upload progress:', progress);
-        const userId = req.body.uploadId || 'user123'; // Temporary user ID
-        emitUploadProgress(userId, {
-          progress,
-          current: i + 1,
-          total: totalFiles,
-          filename: file.originalname,
-          stage: 'uploading'
-        });
+    if (totalImages > 0) {
+      const uploadService = await getDefaultUploadService()
+      const uploadedImages = []
+
+      for (let i = 0; i < totalImages; i++) {
+        const file = req.files[i]
 
         try {
-          console.log('⬆️ Calling uploadService.uploadFile...');
           const uploadResult = await uploadService.uploadFile(
             file.buffer,
             file.originalname,
             'products'
-          );
-          console.log('✅ Upload successful:', uploadResult);
-          
+          )
+
           uploadedImages.push({
             url: uploadResult.url,
-            alt: req.body.imageAlt || productData.name,
-            isMain: uploadedImages.length === 0 // First image is main
-          });
+            ...(uploadResult.fileId ? { fileId: uploadResult.fileId } : {}),
+            alt: productName
+          })
         } catch (uploadError) {
-          console.error('❌ Upload failed for file:', file.originalname, uploadError);
-          throw uploadError;
+          console.error(`Error uploading image ${file.originalname}:`, uploadError)
+          // Keep going so one bad image does not fail the whole product
         }
+
+        emitProgress({
+          status: 'uploading',
+          progress: Math.round(10 + ((i + 1) / totalImages) * 70),
+          currentImage: i + 1,
+          message: `Uploading image ${i + 1} of ${totalImages}...`
+        })
       }
 
-      productData.images = uploadedImages;
-      console.log('📦 All images uploaded successfully:', uploadedImages.length);
-
-      // Emit progress for processing stage (80-95% range)
-      console.log('🔄 Emitting processing progress...');
-      const userId = req.body.uploadId || 'user123'; // Temporary user ID
-      emitUploadProgress(userId, {
-        progress: 85,
-        stage: 'processing'
-      });
+      productData.images = uploadedImages
     }
 
-// Create product in database
-console.log('?? Creating product in database...');
-const product = await Product.create(productData);
-console.log('? Product created successfully:', product._id);
+    emitProgress({
+      status: 'processing',
+      progress: 90,
+      currentImage: totalImages,
+      message: 'Finalizing product creation...'
+    })
 
-// Clear every cache that can hold a copy of this product
-await invalidateProductCaches(product._id, product.slug);
+    const product = await Product.create(productData)
 
-emitCatalogUpdate('product:created', { productId: product._id, slug: product.slug });
+    // Clear every cache that can hold a copy of this product
+    await invalidateProductCaches(product._id, product.slug);
 
+    emitCatalogUpdate('product:created', { productId: product._id, slug: product.slug });
 
-    // Emit completion (100%)
-    console.log('🎉 Emitting completion progress...');
-    const userId = req.body.uploadId || 'user123'; // Temporary user ID
-    emitUploadProgress(userId, {
+    emitProgress({
+      status: 'completed',
       progress: 100,
-      stage: 'completed',
+      currentImage: totalImages,
+      message: 'Product created successfully!',
       productId: product._id
-    });
+    })
 
-    // Add a small delay to ensure progress bar is visible
-    setTimeout(() => {
-      console.log('📤 Sending response to client...');
-      res.status(201).json({
-        success: true,
-        data: product
-      });
-    }, 2000); // 2 second delay to show completion
+    // Respond immediately - the old artificial 2s delay only made the client
+    // wait longer and hid real errors behind a timeout.
+    res.status(201).json({
+      success: true,
+      data: {
+        product,
+        uploadId
+      }
+    });
 
   } catch (error) {
     console.error('❌ Product creation failed:', error);
-    // Emit error if WebSocket available
-    const userId = req.body.uploadId || 'user123'; // Temporary user ID
-    emitUploadProgress(userId, {
+
+    emitProgress({
+      status: 'error',
       progress: 0,
-      stage: 'error',
+      message: error.message || 'Failed to create product',
       error: error.message
-    });
+    })
+
     next(error);
   }
 });

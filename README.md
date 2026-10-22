@@ -107,17 +107,13 @@ cp apps/frontend/.env.example apps/frontend/.env
 
 3. Fill in the backend values for MongoDB, JWT, Redis, email, OAuth, and image storage. Set the frontend API and socket URLs to match the backend port.
 
-4. Start Redis. On WSL:
+4. Start Redis in WSL and both applications:
 
 ```bash
-sudo service redis-server start
+npm run devall
 ```
 
-5. Start both applications:
-
-```bash
-npm run dev
-```
+This starts Redis without a `sudo` prompt, waits for `redis-cli ping` to return `PONG`, then starts the backend and frontend. If Redis is already running, `npm run dev` starts only the applications.
 
 The frontend runs at `http://localhost:3001` and the API at `http://localhost:5001`.
 
@@ -146,6 +142,7 @@ From the repository root:
 
 ```bash
 npm run dev          # Run backend and frontend together
+npm run devall       # Start WSL Redis, wait for PONG, then run both apps
 npm run dev:backend  # Run the API only
 npm run dev:frontend # Run the frontend only
 npm run build        # Build all workspaces
@@ -170,3 +167,5 @@ Checkout currently supports cash on delivery only. No live card or mobile-bankin
 - Redis: managed Redis or a private instance
 
 Set the production environment variables in the hosting dashboards. The included `railway.json` and `vercel.json` files provide build and start defaults.
+
+Set `REDIS_URL` to the managed Redis URL supplied by the host. Do not use `127.0.0.1` or a WSL IP in production. Use the provider's database number; many hosted Redis services only support database `0`.
